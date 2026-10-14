@@ -1,0 +1,525 @@
+===============================================================================
+ BUATQRIS — KONFIGURASI OPEN API (LENGKAP)
+ Dokumen referensi untuk integrator. Simpan/cetak sesuai kebutuhan.
+===============================================================================
+
+BASE URL     : https://api.buatqris.site
+METODE       : POST
+CONTENT-TYPE : application/x-www-form-urlencoded
+RESPONS      : application/json (UTF-8)
+
+Semua endpoint memakai SATU URL yang sama. Endpoint dibedakan lewat parameter
+`action`.
+
+
+-------------------------------------------------------------------------------
+0. SEBELUM MULAI — YANG WAJIB DISIAPKAN
+-------------------------------------------------------------------------------
+
+  1) Kredensial API
+     Ambil di dasbor → menu "Open API" → kartu "Kredensial API".
+       account_id    : ID akun kamu (dipakai sebagai identitas)
+       secret_token  : kunci rahasia (diawali sk_live_)
+
+  2) Website / link usaha  [BARU]
+     Isi di dasbor → Profil → "Website / Link Usaha".
+     Alamat tempat Open API ini dipakai. Akun yang belum mengisinya ditandai
+     "belum lengkap", TAPI Open API TETAP BISA DIPAKAI — pengisian ini tidak
+     memblokir apa pun. Isi begitu sempat.
+
+  3) Email akun terverifikasi
+     Wajib untuk mengubah data akun (PIN, nama, nama QRIS, email) dan untuk
+     mendaftarkan rekening penarikan. Tidak memblokir pembuatan QRIS.
+
+  4) PIN Akun + rekening penarikan terdaftar
+     Hanya diperlukan kalau kamu memakai endpoint penarikan (api_withdraw).
+     Lihat bagian 4.
+
+  ATURAN PALING PENTING
+     Panggil API ini HANYA dari server/backend milikmu.
+     JANGAN dari JavaScript browser, aplikasi Android/iOS, atau Flutter secara
+     langsung — secret_token akan ikut terkirim ke perangkat pengguna dan bisa
+     dibaca siapa pun. Alurnya:
+
+         App / Web (frontend)  →  Backend kamu (simpan secret_token)  →  BuatQris
+
+     Request dari browser juga diblokir sistem keamanan hosting.
+
+  JANGAN PERNAH menaruh secret_token di repository, kode frontend, atau file
+  yang ikut dibagikan. Simpan di environment variable.
+
+
+-------------------------------------------------------------------------------
+1. AUTENTIKASI
+-------------------------------------------------------------------------------
+
+Setiap request menyertakan dua field:
+
+    account_id      (string, wajib)
+    secret_token    (string, wajib, minimal 20 karakter)
+
+Kredensial salah / tidak cocok  →  {"success":false,"message":"Kredensial API tidak valid"}
+
+Mengganti token: dasbor → Open API → "Regenerate Token".
+Token lama LANGSUNG tidak berlaku begitu diganti.
+
+
+-------------------------------------------------------------------------------
+2. action=api_create_qris — BUAT TRANSAKSI QRIS
+-------------------------------------------------------------------------------
+
+PARAMETER
+  action          wajib    "api_create_qris"
+  account_id      wajib    ID akun
+  secret_token    wajib    kunci rahasia
+  amount          wajib    angka. Dibulatkan ke rupiah penuh.
+                           minimum Rp 1.000 (default), maksimum Rp 5.000.000
+                           (default). Batas ini DIATUR ADMIN (Panel Admin →
+                           Konfigurasi), jadi bisa berbeda di tiap merchant.
+  description     opsional teks, otomatis dipotong 100 karakter
+                           default: "Pembayaran via API"
+  qris_name       opsional [KHUSUS PRO] nama toko yang tampil di QR, bisa diganti
+  (merchant_name/          per transaksi. Alias lama: merchant_name, umkm_name.
+   umkm_name)              Kosong → memakai nama UMKM di profil akunmu.
+                           Akun BIASA: field ini diabaikan (QR tetap pakai nama
+                           profil). Respons memuat "qris_name_applied": true/false
+                           untuk menandai apakah nama kustom benar-benar terpasang.
+  qris_method     opsional qris_one | qris_two | qris_three | qris_four
+                           Kosong → metode default yang diatur admin.
+                           PENTING — AUTO-PINDAH: kalau metode yang kamu minta
+                           sedang NONAKTIF/off, sistem otomatis memakai metode
+                           lain yang aktif. Fee & kode unik pada respons SELALU
+                           mengikuti metode yang BENAR-BENAR dipakai (lihat
+                           `qris_method` di respons), bukan yang kamu minta.
+                           Jadi baca `admin_fee`/`total_amount` dari respons,
+                           jangan berasumsi dari metode yang kamu kirim.
+  fee_by          opsional "user"  → biaya admin dipotong dari saldo kamu (default)
+                           "buyer" → biaya admin ditambahkan ke tagihan pembeli,
+                                     kamu menerima nominal penuh
+  callback_url    opsional URL http(s) tujuan webhook KHUSUS transaksi ini.
+                           Kosong → memakai Callback URL di pengaturan akun.
+  test            opsional "1" | "true" | "yes" | "test" → transaksi SANDBOX
+                           (tanpa uang asli, kredit ke saldo sandbox)
+                           alias: mode=test
+  app_name        opsional nama aplikasi pemanggil (untuk audit)
+  app_version     opsional versi aplikasi pemanggil
+  app_url         opsional URL asal pemanggil
+
+  Tiga field terakhir juga bisa dikirim sebagai HTTP header:
+      X-App-Name, X-App-Version, X-App-Url
+
+BATAS PEMAKAIAN
+  Maksimum 60 pembuatan transaksi per menit per akun.
+  Melebihi → {"success":false,"message":"Rate limit: terlalu banyak transaksi..."}
+
+CONTOH REQUEST
+  action=api_create_qris
+  &account_id=YOUR_ACCOUNT_ID
+  &secret_token=YOUR_SECRET_TOKEN
+  &amount=25000
+  &description=Pembayaran%20order%20%23INV-1024
+  &qris_method=qris_two
+  &fee_by=user
+
+CONTOH RESPONS SUKSES
+  {
+    "success": true,
+    "data": {
+      "transaction_id": "100043729581",
+      "amount":         25000,      // nominal yang kamu minta
+      "total_amount":   25037,      // yang harus dibayar pembeli (termasuk kode unik)
+      "amount_uniq":    37,         // selisih kode unik
+      "admin_fee":      500,
+      "admin_fee_pct":  2,
+      "credit_amount":  24500,      // yang masuk ke saldo kamu saat lunas
+      "fee_by":         "user",
+      "qris_method":    "qris_two",
+      "description":    "Pembayaran order #INV-1024",
+      "umkm_name":      "Warung Pak Budi",
+      "profile_pic":    "https://app.buatqris.site/poto/pp_xxx.jpg",
+      "qris_image":     "data:image/png;base64,iVBORw0KG...",
+      "qr_url":         "https://app.buatqris.site/poto/qris/100043729581.png",
+      "qris_url":       null,
+      "qris_string":    null,
+      "direct_url":     null,
+      "expired_at":     "2026-08-29T10:15:00+07:00",
+      "status":         "pending",
+      "payment_url":    "https://app.buatqris.site/trx/100043729581"
+    }
+  }
+
+CATATAN PENTING TENTANG RESPONS
+  qris_string / qris_url / direct_url SELALU null.
+  Ketiganya berisi payload QRIS mentah dan domain provider — data internal yang
+  tidak boleh tersebar. Untuk menampilkan QR, pakai salah satu:
+      qr_url      → URL gambar PNG di domain BuatQris (aman dari CORS, paling ringan)
+      qris_image  → data URI base64, kalau kamu ingin menyimpan gambarnya sendiri
+      payment_url → halaman bayar siap pakai buatan BuatQris
+
+MENAMPILKAN QR DI HALAMANMU
+  <img src="{qr_url}" alt="QRIS" width="260" height="260">
+  atau
+  <img src="{qris_image}" alt="QRIS" width="260" height="260">
+
+
+-------------------------------------------------------------------------------
+3. action=api_check_status — CEK STATUS TRANSAKSI
+-------------------------------------------------------------------------------
+
+PARAMETER
+  action          wajib    "api_check_status"
+  account_id      wajib
+  secret_token    wajib
+  transaction_id  wajib    ID dari api_create_qris
+
+BATAS PEMAKAIAN — BACA INI
+  Maksimum 1 cek per 20 detik untuk setiap (akun + transaksi).
+  Lebih cepat dari itu dijawab HTTP 429:
+
+    {
+      "success": false,
+      "error": "rate_limited",
+      "message": "Terlalu sering cek status. Coba lagi dalam N detik...",
+      "retry_after": 14
+    }
+
+  Header `Retry-After` juga dikirim.
+
+  DISARANKAN: pakai webhook (bagian 5), bukan polling. Webhook sampai seketika
+  dan tidak membebani server siapa pun.
+
+CONTOH RESPONS
+  {
+    "success": true,
+    "data": {
+      "transaction_id": "100043729581",
+      "status":         "success",   // pending | success | expired | failed
+      "amount":         25000,
+      "total_amount":   25037,
+      "admin_fee":      500,
+      "credit_amount":  24500,
+      "qris_method":    "qris_two",
+      "updated_at":     "2026-08-29T10:03:11+07:00"
+    }
+  }
+
+
+-------------------------------------------------------------------------------
+4. action=api_withdraw — TARIK SALDO
+-------------------------------------------------------------------------------
+
+  >>> PERUBAHAN PENTING <<<
+  Endpoint ini TIDAK LAGI menerima bank_name / bank_account / bank_holder.
+  Uang hanya bisa dikirim ke rekening yang sudah DIDAFTARKAN pemilik akun dan
+  sudah lewat masa tunggunya. Kalau kode lamamu masih mengirim nomor rekening
+  langsung, ganti sekarang — request-nya akan ditolak.
+
+  Alasannya: dulu siapa pun yang memegang account_id + secret_token bisa
+  mengirim saldo ke rekening mana saja, tanpa login, tanpa PIN, tanpa jeda.
+
+PERSIAPAN SATU KALI (lewat dasbor, tidak lewat API)
+  1. Verifikasi email akun          — Profil → Verifikasi & Kelengkapan Akun
+  2. Buat PIN Akun (6 angka)        — Penarikan → Keamanan Penarikan
+  3. Daftarkan rekening tujuan      — Penarikan → "+ Daftarkan Rekening"
+     Butuh PIN Akun + kode verifikasi email.
+     Maksimal 5 rekening tersimpan per akun.
+     Rekening baru BELUM bisa dipakai sampai masa tunggunya lewat
+     (default 24 jam — diatur admin). Ini disengaja.
+     Pengecualian: rekening yang didaftarkan admin lewat panel (mis. saat kamu
+     minta bantuan) langsung bisa dipakai, tanpa masa tunggu.
+  4. Catat `wd_account_id` rekening tersebut (tampil di daftar rekening).
+
+PARAMETER
+  action          wajib    "api_withdraw"
+  account_id      wajib
+  secret_token    wajib
+  amount          wajib    minimal sesuai "Min. Penarikan" yang diatur admin
+  wd_account_id   wajib    ID rekening terdaftar (mis. wda_9f2b...)
+  wd_pin          wajib    PIN Akun 6 angka
+
+CONTOH REQUEST
+  action=api_withdraw
+  &account_id=YOUR_ACCOUNT_ID
+  &secret_token=YOUR_SECRET_TOKEN
+  &amount=100000
+  &wd_account_id=wda_9f2b1c4d5e6f7a8b
+  &wd_pin=142536
+
+CONTOH RESPONS
+  {
+    "success": true,
+    "message": "Permintaan penarikan berhasil! Proses maksimal 1x12 jam.",
+    "data": {
+      "withdrawal_id": "WD-ABC1-2DEF-3GHI-4JKL",
+      "amount":        100000,
+      "fee":           0,
+      "net_amount":    100000,
+      "bank_name":     "Bank BCA",
+      "bank_account":  "1234567890",
+      "bank_holder":   "Nama Pemilik",
+      "status":        "pending",
+      "created_at":    "2026-08-29T11:00:00+07:00",
+      "saldo":         350000
+    }
+  }
+
+KEMUNGKINAN PENOLAKAN
+  "Rekening tujuan tidak terdaftar..."          → wd_account_id salah/belum didaftarkan
+  "Rekening ini baru didaftarkan..."            → masih dalam masa tunggu
+  "PIN salah. Sisa percobaan: N."               → PIN keliru
+  "PIN terkunci karena salah berulang kali..."  → tunggu sesuai pesan
+  "Penarikan sedang dibekukan sementara..."     → setelah PIN diatur ulang lewat password
+  "Masih ada penarikan pending..."              → selesaikan yang berjalan dulu
+  "Saldo tidak mencukupi..."
+  "Fitur penarikan sedang dinonaktifkan/maintenance oleh admin."
+
+BIAYA PENARIKAN
+  Ditentukan admin dan mengikuti tujuan + nominal. Nilai final selalu ada di
+  `fee` dan `net_amount` pada respons — jangan hitung sendiri di sisi klien.
+
+
+-------------------------------------------------------------------------------
+5. action=api_withdraw_status — CEK STATUS PENARIKAN
+-------------------------------------------------------------------------------
+
+PARAMETER
+  action          wajib    "api_withdraw_status"
+  account_id      wajib
+  secret_token    wajib
+  withdrawal_id   wajib
+
+CONTOH RESPONS
+  {
+    "success": true,
+    "data": {
+      "withdrawal_id": "WD-ABC1-2DEF-3GHI-4JKL",
+      "status":        "approved",   // pending | approved | rejected | success (sandbox)
+      "amount":        100000,
+      "fee":           0,
+      "net_amount":    100000,
+      "bank_name":     "Bank BCA",
+      "bank_account":  "1234567890",
+      "bank_holder":   "Nama Pemilik",
+      "note":          "",
+      "is_test":       false,
+      "created_at":    "2026-08-29T11:00:00+07:00",
+      "processed_at":  "2026-08-29T12:30:00+07:00"
+    }
+  }
+
+
+-------------------------------------------------------------------------------
+6. WEBHOOK / CALLBACK — CARA YANG DIANJURKAN
+-------------------------------------------------------------------------------
+
+BuatQris otomatis mengirim POST ke URL milikmu setiap ada perubahan status.
+Tidak perlu polling.
+
+PENGATURAN
+  Dasbor → Open API → kartu "Webhook / Callback".
+  Bisa mengisi DUA URL sekaligus (mis. satu untuk frontend, satu untuk backend).
+  Keduanya menerima event yang sama, ditandatangani dengan secret yang sama.
+
+HEADER YANG DIKIRIM
+  Content-Type            : application/json
+  X-BuatQris-Event        : nama event
+  X-BuatQris-Delivery     : transaction_id atau withdrawal_id
+  X-BuatQris-Signature    : sha256=<hex hmac dari body mentah>
+
+DAFTAR EVENT
+  payment.success        pembayaran lunas
+  payment.expired        QR kedaluwarsa
+  payment.failed         gagal / dibatalkan provider
+  withdrawal.pending     penarikan diajukan
+  withdrawal.approved    penarikan disetujui & dicairkan
+  withdrawal.rejected    penarikan ditolak (saldo dikembalikan otomatis)
+
+CONTOH BODY — PEMBAYARAN
+  {
+    "event":          "payment.success",
+    "transaction_id": "100043729581",
+    "status":         "success",
+    "amount":         10000,
+    "total_amount":   10037,
+    "credit_amount":  9800,
+    "admin_fee":      200,
+    "fee_by":         "user",
+    "qris_method":    "qris_two",
+    "is_test":        false,
+    "paid_at":        "2026-08-29T10:00:00+07:00"
+  }
+
+CONTOH BODY — PENARIKAN
+  {
+    "event":          "withdrawal.approved",
+    "withdrawal_id":  "WD-ABC1-2DEF-3GHI-4JKL",
+    "transaction_id": "WD-ABC1-2DEF-3GHI-4JKL",
+    "status":         "approved",
+    "amount":         100000,
+    "fee":            0,
+    "net_amount":     100000,
+    "bank_name":      "Bank BCA",
+    "bank_account":   "1234567890",
+    "bank_holder":    "Nama Pemilik",
+    "is_test":        false,
+    "processed_at":   "2026-08-29T11:00:00+07:00"
+  }
+
+BALASAN YANG DIHARAPKAN
+  HTTP 2xx (200-299) → dianggap terkirim.
+  Selain itu → sistem mencoba ulang SATU kali, jeda 0,3 detik.
+  Batas waktu tiap percobaan: 6 detik. Balas cepat, kerjakan sisanya belakangan.
+
+VERIFIKASI TANDA TANGAN (WAJIB)
+  Tanpa langkah ini, siapa pun yang tahu URL-mu bisa mengirim "pembayaran lunas"
+  palsu. Verifikasi memakai BODY MENTAH, bukan hasil parse.
+
+  PHP:
+    $body = file_get_contents('php://input');
+    $sig  = $_SERVER['HTTP_X_BUATQRIS_SIGNATURE'] ?? '';
+    $calc = 'sha256=' . hash_hmac('sha256', $body, $SIGNING_SECRET);
+    if (!hash_equals($calc, $sig)) { http_response_code(401); exit; }
+    $data = json_decode($body, true);
+    http_response_code(200);
+
+  Node.js (Express, butuh raw body):
+    const crypto = require('crypto');
+    app.post('/webhook', express.raw({type:'*/*'}), (req, res) => {
+      const calc = 'sha256=' + crypto.createHmac('sha256', SIGNING_SECRET)
+                                     .update(req.body).digest('hex');
+      const sig  = req.get('X-BuatQris-Signature') || '';
+      if (calc.length !== sig.length ||
+          !crypto.timingSafeEqual(Buffer.from(calc), Buffer.from(sig)))
+        return res.sendStatus(401);
+      const data = JSON.parse(req.body.toString());
+      res.sendStatus(200);
+    });
+
+  Python (Flask):
+    import hmac, hashlib
+    body = request.get_data()
+    calc = 'sha256=' + hmac.new(SIGNING_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(calc, request.headers.get('X-BuatQris-Signature','')):
+        return '', 401
+    data = request.get_json()
+    return '', 200
+
+  Signing secret ada di dasbor → Open API → "Signing Secret".
+  Regenerasi membuat secret lama langsung tidak berlaku.
+
+IDEMPOTENSI
+  Sebuah event bisa terkirim lebih dari sekali (percobaan ulang). Simpan
+  transaction_id / withdrawal_id yang sudah diproses, dan abaikan yang berulang.
+
+
+-------------------------------------------------------------------------------
+7. MODE SANDBOX (UJI COBA)
+-------------------------------------------------------------------------------
+
+Tambahkan `test=1` pada api_create_qris. Transaksi diproses seperti biasa tetapi
+tanpa uang asli, dan kreditnya masuk ke saldo sandbox yang terpisah dari saldo
+sebenarnya. Cocok untuk menguji alur webhook dan penanganan status di sisi kamu.
+
+    action=api_create_qris&...&test=1
+
+Transaksi sandbox ditandai `"is_test": true` di webhook.
+
+
+-------------------------------------------------------------------------------
+8. BENTUK RESPONS & PENANGANAN ERROR
+-------------------------------------------------------------------------------
+
+SUKSES
+  {"success": true, "data": { ... }}
+
+GAGAL
+  {"success": false, "message": "penjelasan singkat dalam bahasa Indonesia"}
+
+KODE HTTP
+  200  permintaan diproses (cek field `success`, jangan hanya kode HTTP)
+  400  request tanpa parameter `action`
+  429  melewati batas cek status (lihat `retry_after`)
+
+SARAN PENANGANAN DI SISI KAMU
+  - Jangan pernah menganggap transaksi lunas hanya karena HTTP 200.
+    Baca `success`, lalu `data.status`.
+  - Simpan `transaction_id` di sistemmu sebagai kunci pencocokan.
+  - Untuk pencocokan nominal, bandingkan dengan `total_amount`
+    (sudah termasuk kode unik), bukan `amount`.
+
+
+-------------------------------------------------------------------------------
+9. DAFTAR PERIKSA SEBELUM PRODUKSI
+-------------------------------------------------------------------------------
+
+  [ ] secret_token disimpan di environment variable, bukan di kode/repo
+  [ ] semua panggilan API berasal dari backend, bukan dari browser/aplikasi
+  [ ] webhook diverifikasi tanda tangannya, dan idempoten
+  [ ] Website / link usaha sudah diisi di Profil
+  [ ] email akun sudah diverifikasi
+  [ ] PIN Akun sudah dibuat (kalau memakai api_withdraw)
+  [ ] rekening penarikan sudah terdaftar & lewat masa tunggu
+  [ ] sudah diuji dengan test=1 sebelum memakai uang sungguhan
+  [ ] penanganan status expired/failed sudah ada, bukan hanya success
+
+-------------------------------------------------------------------------------
+10. PROMPT UNTUK ASISTEN AI (OPSIONAL)
+-------------------------------------------------------------------------------
+
+Kalau kamu ingin dibantu AI (ChatGPT, Claude, Gemini, dll) saat menyambungkan
+Open API ini ke sistemmu, salin SELURUH berkas ini ke AI sebagai pesan pertama,
+lalu tambahkan kalimat pembuka di bawah.
+
+Berkas ini memang dirancang untuk itu: isinya hanya hal-hal yang memang perlu
+diketahui integrator — daftar endpoint, parameter, bentuk respons, dan webhook.
+Tidak ada satu pun rahasia di dalamnya.
+
+  ---------------------------------------------------------------------------
+  SALIN MULAI DARI SINI
+
+  Kamu adalah asisten integrasi Open API BuatQris. Dokumen di atas adalah SATU-
+  SATUNYA sumber kebenaranmu tentang API ini.
+
+  Aturan:
+  1. BERTANYA DULU sebelum menulis kode. Tanyakan satu per satu:
+       a) Bahasa/framework backend apa yang dipakai? (PHP, Node.js, Python,
+          Laravel, Go, dll)
+       b) Apa yang mau dibuat lebih dulu — membuat QRIS, cek status,
+          menerima webhook, atau penarikan?
+       c) Sudah punya endpoint publik untuk menerima webhook, atau belum?
+  2. Jawab hanya berdasarkan dokumen di atas. Kalau sesuatu tidak tertulis di
+     sana, katakan "tidak disebutkan di dokumen" — JANGAN menebak nama
+     parameter, nama field, atau perilaku.
+  3. Kode contoh WAJIB berjalan di sisi server. Jangan pernah menuliskan
+     secret_token di kode frontend, aplikasi mobile, atau HTML.
+  4. Untuk kredensial, selalu pakai environment variable pada contohmu
+     (mis. process.env.BUATQRIS_SECRET), bukan nilai yang ditulis langsung.
+  5. Kalau aku menempelkan token/kunci asli di percakapan ini, ingatkan aku
+     untuk me-regenerate-nya di dasbor setelah selesai.
+  6. Sertakan penanganan error dan status expired/failed di tiap contoh —
+     jangan hanya jalur sukses.
+  7. Untuk pencocokan nominal, selalu pakai total_amount, bukan amount.
+  8. Webhook: selalu sertakan verifikasi tanda tangan dan penanganan idempoten.
+
+  Yang TIDAK perlu kamu bahas: cara kerja internal server BuatQris, struktur
+  database, isi berkas konfigurasi server, atau cara memasang/menyetel platform
+  BuatQris itu sendiri. Tugasmu hanya menyambungkan SISTEMKU ke API ini.
+
+  Mulai dengan menyapa singkat, lalu ajukan pertanyaan 1a.
+
+  SALIN SAMPAI SINI
+  ---------------------------------------------------------------------------
+
+CATATAN KEAMANAN SAAT MEMAKAI AI
+  - Jangan tempelkan secret_token, signing secret, atau PIN Akun ke chat AI.
+    Ganti dengan placeholder seperti YOUR_SECRET_TOKEN.
+  - Kalau sempat tertempel, segera tekan "Regenerate Token" di dasbor →
+    Open API. Token lama langsung tidak berlaku.
+  - AI bisa keliru. Uji tiap potongan kode dengan test=1 lebih dulu sebelum
+    dipakai untuk uang sungguhan.
+
+
+
+===============================================================================
+ Pertanyaan atau kendala integrasi: hubungi admin lewat dasbor → Pesan.
+===============================================================================
